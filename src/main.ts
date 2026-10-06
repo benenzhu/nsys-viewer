@@ -1,5 +1,6 @@
 import "./style.css";
 import type { KernelEvent, Stage, TraceData, WorkerResponse } from "./types";
+import { overlapDuration, summarizeKernels, type KernelSummary, type TimeSpan } from "./breakdown";
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) throw new Error("Missing app root");
@@ -28,7 +29,13 @@ app.innerHTML = `
 
       <section id="workspace" class="workspace hidden" aria-label="Trace timeline">
         <div class="workspace-heading">
-          <div class="trace-heading"><strong id="file-title">—</strong><span id="trace-summary">—</span></div>
+          <div class="trace-heading">
+            <strong id="file-title" tabindex="0" title="Double-click to rename">—</strong>
+            <input id="title-input" class="title-input hidden" aria-label="Trace title" maxlength="200" />
+            <button id="rename-title" class="button button-subtle" type="button">Rename</button>
+            <button id="reset-title" class="button button-subtle hidden" type="button" title="Use the original filename">Reset title</button>
+            <span id="trace-summary">—</span>
+          </div>
           <div class="trace-stats"><span><strong id="kernel-count">—</strong> kernels</span><span><strong id="device-count">—</strong> GPUs</span><span><strong id="trace-span">—</strong> span</span></div>
         </div>
 
@@ -66,7 +73,7 @@ app.innerHTML = `
 
         <section class="breakdown-card" aria-label="Kernel breakdown">
           <div class="breakdown-heading">
-            <strong>Kernel breakdown · full trace</strong>
+            <strong id="breakdown-title">Kernel breakdown · full trace</strong>
             <label>Device <select id="breakdown-device" aria-label="Breakdown device"></select></label>
           </div>
           <p id="breakdown-note" class="breakdown-note"></p>
@@ -76,6 +83,7 @@ app.innerHTML = `
                 <th><button type="button" data-sort="name">Kernel <span></span></button></th>
                 <th><button type="button" data-sort="count">Calls <span></span></button></th>
                 <th><button type="button" data-sort="gpuMs">GPU time <span></span></button></th>
+                <th class="span-column hidden"><button type="button" data-sort="spanShare">Span % <span></span></button></th>
                 <th><button type="button" data-sort="gpuShare">GPU share <span></span></button></th>
                 <th><button type="button" data-sort="avgMs">Avg <span></span></button></th>
                 <th><button type="button" data-sort="wallMs">Wall coverage <span></span></button></th>
@@ -111,9 +119,16 @@ const themeToggle = element<HTMLButtonElement>("#theme-toggle");
 const selectionSummary = element<HTMLSpanElement>("#selection-summary");
 const breakdownDevice = element<HTMLSelectElement>("#breakdown-device");
 const breakdownRows = element<HTMLTableSectionElement>("#breakdown-rows");
+const fileTitle = element<HTMLElement>("#file-title");
+const titleInput = element<HTMLInputElement>("#title-input");
+const renameTitle = element<HTMLButtonElement>("#rename-title");
+const resetTitle = element<HTMLButtonElement>("#reset-title");
 
 let trace: TraceData | null = null;
 let fileKey = "";
+let fileName = "";
+let pendingFile: { key: string; name: string } | null = null;
+let traceTitle = "";
 let stageOrder: number[] = [];
 let stageLabels: Record<number, string> = {};
 interface KernelLane {
@@ -133,21 +148,15 @@ let viewStartMs = 0;
 let viewEndMs = 1;
 let selected: KernelEvent | null = null;
 let hovered: KernelEvent | null = null;
-let selection: { start: number; end: number } | null = null;
+let selection: TimeSpan | null = null;
 let drawPending = false;
 let zoomTarget: { start: number; end: number } | null = null;
 let zoomAnimating = false;
 let toastTimer = 0;
-interface KernelSummary {
-  name: string;
-  count: number;
-  gpuMs: number;
-  wallMs: number;
-  lastEndMs: number;
-}
 let breakdownCache = new Map<string, { rows: KernelSummary[]; totalGpuMs: number }>();
+let breakdownPending = false;
 let breakdownSort: "name" | "count" | "gpuMs" | "gpuShare" | "avgMs" |
-  "wallMs" | "wallShare" = "gpuMs";
+  "wallMs" | "wallShare" | "spanShare" = "gpuMs";
 let breakdownDescending = true;
 
 const systemDark = window.matchMedia("(prefers-color-scheme: dark)");
@@ -304,6 +313,59 @@ function restoreLayout(devices: number[]): void {
   }
 }
 
+function applyTraceTitle(): void {
+  fileTitle.textContent = traceTitle;
+  fileTitle.title = `${fileName} · Double-click to rename`;
+  document.title = `${traceTitle} · nsys-viewer`;
+  resetTitle.classList.toggle("hidden", traceTitle === fileName);
+}
+
+function finishTitleEdit(save: boolean): void {
+  if (save) {
+    traceTitle = titleInput.value.trim() || fileName;
+    try {
+      const key = `nsys-viewer:title:${fileKey}`;
+      if (traceTitle === fileName) localStorage.removeItem(key);
+      else localStorage.setItem(key, traceTitle);
+    } catch {
+      // Renaming still works in this tab when storage is unavailable.
+    }
+    applyTraceTitle();
+  }
+  titleInput.classList.add("hidden");
+  fileTitle.classList.remove("hidden");
+  renameTitle.classList.remove("hidden");
+}
+
+function startTitleEdit(): void {
+  titleInput.value = traceTitle;
+  fileTitle.classList.add("hidden");
+  renameTitle.classList.add("hidden");
+  titleInput.classList.remove("hidden");
+  titleInput.focus();
+  titleInput.select();
+}
+
+renameTitle.addEventListener("click", startTitleEdit);
+fileTitle.addEventListener("dblclick", startTitleEdit);
+fileTitle.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" || event.key === "F2") startTitleEdit();
+});
+titleInput.addEventListener("blur", () => {
+  if (!titleInput.classList.contains("hidden")) finishTitleEdit(true);
+});
+titleInput.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== "Escape") return;
+  event.stopPropagation();
+  event.preventDefault();
+  finishTitleEdit(event.key === "Enter");
+  renameTitle.focus();
+});
+resetTitle.addEventListener("click", () => {
+  titleInput.value = fileName;
+  finishTitleEdit(true);
+});
+
 async function openFile(file: File): Promise<void> {
   if (!/\.(sqlite|sqlite3|db)$/i.test(file.name)) {
     announce("Choose an Nsight SQLite export (.sqlite, .sqlite3, or .db).", true);
@@ -311,7 +373,7 @@ async function openFile(file: File): Promise<void> {
   }
   element<HTMLButtonElement>("#open-button").disabled = true;
   announce(`Opening ${file.name} locally…`);
-  fileKey = `${file.name}:${file.size}`;
+  pendingFile = { key: `${file.name}:${file.size}`, name: file.name };
   try {
     const buffer = await file.arrayBuffer();
     worker.postMessage({ buffer }, [buffer]);
@@ -322,9 +384,24 @@ async function openFile(file: File): Promise<void> {
 }
 
 function loadTrace(data: TraceData): void {
+  if (pendingFile) {
+    fileKey = pendingFile.key;
+    fileName = pendingFile.name;
+    pendingFile = null;
+  }
+  traceTitle = fileName;
+  try {
+    traceTitle = localStorage.getItem(`nsys-viewer:title:${fileKey}`)?.trim() || fileName;
+  } catch {
+    // Fall back to the filename when storage is unavailable.
+  }
+  finishTitleEdit(false);
+  applyTraceTitle();
   trace = data;
   zoomTarget = null;
   hovered = null;
+  selected = null;
+  tooltip.classList.add("hidden");
   setSelection(null);
   kernelsByStream = new Map(data.stages.map((stage) => [
     stage.deviceId,
@@ -366,7 +443,6 @@ function loadTrace(data: TraceData): void {
   inspector.className = "inspector-empty";
   emptyState.classList.add("hidden");
   workspace.classList.remove("hidden");
-  element<HTMLElement>("#file-title").textContent = fileKey.split(":").slice(0, -1).join(":");
   element<HTMLElement>("#trace-summary").textContent =
     `Nsight SQLite schema ${data.schemaVersion} · parsed entirely in this browser`;
   element<HTMLElement>("#kernel-count").textContent = data.kernels.length.toLocaleString();
@@ -391,26 +467,8 @@ function kernelBreakdown(device: string): { rows: KernelSummary[]; totalGpuMs: n
   const cached = breakdownCache.get(device);
   if (cached) return cached;
   if (!trace) return { rows: [], totalGpuMs: 0 };
-  const byName = new Map<string, KernelSummary>();
-  let totalGpuMs = 0;
-  for (const kernel of trace.kernels) {
-    if (device !== "all" && kernel.deviceId !== Number(device)) continue;
-    const name = trace.names[kernel.nameId] ?? "Unknown kernel";
-    let row = byName.get(name);
-    if (!row) {
-      row = { name, count: 0, gpuMs: 0, wallMs: 0, lastEndMs: -Infinity };
-      byName.set(name, row);
-    }
-    const duration = Math.max(0, kernel.endMs - kernel.startMs);
-    row.count++;
-    row.gpuMs += duration;
-    totalGpuMs += duration;
-    if (kernel.endMs > row.lastEndMs) {
-      row.wallMs += Math.max(0, kernel.endMs - Math.max(kernel.startMs, row.lastEndMs));
-      row.lastEndMs = kernel.endMs;
-    }
-  }
-  const result = { rows: [...byName.values()], totalGpuMs };
+  const result = summarizeKernels(trace, device,
+    selection ?? { start: 0, end: trace.durationMs });
   breakdownCache.set(device, result);
   return result;
 }
@@ -422,7 +480,13 @@ function percent(part: number, whole: number): string {
 
 function renderBreakdown(): void {
   if (!trace) return;
-  const traceDurationMs = trace.durationMs;
+  const spanDurationMs = selection ? selection.end - selection.start : trace.durationMs;
+  element<HTMLElement>("#breakdown-title").textContent = selection
+    ? `Kernel breakdown · selected span · ${formatTime(spanDurationMs)}`
+    : "Kernel breakdown · full trace";
+  document.querySelectorAll<HTMLElement>(".span-column").forEach((column) => {
+    column.classList.toggle("hidden", !selection);
+  });
   const { rows, totalGpuMs } = kernelBreakdown(breakdownDevice.value);
   const term = search.value.trim().toLowerCase();
   const filtered = rows.filter((row) => row.name.toLowerCase().includes(term));
@@ -433,7 +497,8 @@ function renderBreakdown(): void {
       case "gpuShare": return totalGpuMs ? row.gpuMs / totalGpuMs : 0;
       case "avgMs": return row.gpuMs / row.count;
       case "wallMs": return row.wallMs;
-      case "wallShare": return row.wallMs / traceDurationMs;
+      case "wallShare": return spanDurationMs > 0 ? row.wallMs / spanDurationMs : 0;
+      case "spanShare": return spanDurationMs > 0 ? row.gpuMs / spanDurationMs : 0;
       default: return 0;
     }
   };
@@ -449,10 +514,11 @@ function renderBreakdown(): void {
       row.name,
       row.count.toLocaleString(),
       formatTime(row.gpuMs),
+      ...(selection ? [percent(row.gpuMs, spanDurationMs)] : []),
       percent(row.gpuMs, totalGpuMs),
       formatTime(row.gpuMs / row.count),
       formatTime(row.wallMs),
-      percent(row.wallMs, traceDurationMs),
+      percent(row.wallMs, spanDurationMs),
     ];
     for (const [index, content] of cells.entries()) {
       const td = document.createElement("td");
@@ -465,11 +531,26 @@ function renderBreakdown(): void {
     }
     fragment.append(tr);
   }
+  if (!filtered.length) {
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.colSpan = selection ? 8 : 7;
+    td.className = "breakdown-empty";
+    td.textContent = rows.length ? "No kernel names match your search."
+      : selection ? "No kernels overlap this span on the selected device(s)."
+      : "No kernels on the selected device(s).";
+    tr.append(td);
+    fragment.append(tr);
+  }
   breakdownRows.replaceChildren(fragment);
   element<HTMLElement>("#breakdown-note").textContent =
     `${filtered.length} of ${rows.length} names · GPU share = summed kernel time / ` +
-    `${formatTime(totalGpuMs)} total GPU time. Wall % = each name’s union coverage / ` +
-    `${formatTime(traceDurationMs)} trace span. Names overlap, so Wall % does not ` +
+    `${formatTime(totalGpuMs)} total GPU time. ` +
+    (selection ? `Span % = summed kernel time / ${formatTime(spanDurationMs)} selected span; ` +
+      `concurrent kernels and multiple GPUs can exceed 100%. Calls include overlapping launches; ` +
+      `GPU time and Avg use only their time inside the span. ` : "") +
+    `Wall % = each name’s union coverage / ${formatTime(spanDurationMs)} ` +
+    `${selection ? "selected" : "trace"} span. Names overlap, so Wall % does not ` +
     `add up and does not measure removable latency.`;
   document.querySelectorAll<HTMLButtonElement>(
     ".breakdown-table thead button",
@@ -601,7 +682,7 @@ function xFor(ms: number, width: number): number {
   return ((ms - viewStartMs) / (viewEndMs - viewStartMs)) * width;
 }
 
-function setSelection(next: { start: number; end: number } | null): void {
+function setSelection(next: TimeSpan | null): void {
   selection = next;
   selectionSummary.classList.toggle("hidden", !next);
   if (next) {
@@ -610,6 +691,17 @@ function setSelection(next: { start: number; end: number } | null): void {
     element<HTMLElement>("#selection-bounds").textContent =
       `${formatTime(next.start)} – ${formatTime(next.end)}`;
   }
+  breakdownCache.clear();
+  if (!next && breakdownSort === "spanShare") breakdownSort = "gpuMs";
+  if (!breakdownPending) {
+    breakdownPending = true;
+    requestAnimationFrame(() => {
+      breakdownPending = false;
+      renderBreakdown();
+    });
+  }
+  if (selected) inspect(selected);
+  tooltip.classList.add("hidden");
   requestDraw();
 }
 
@@ -842,6 +934,13 @@ function showTooltip(kernel: KernelEvent, event: PointerEvent): void {
   const detail = document.createElement("span");
   detail.textContent = `${stageLabels[kernel.deviceId]} · ${formatTime(kernel.endMs - kernel.startMs)}`;
   tooltip.append(title, detail);
+  if (selection) {
+    const spanDetail = document.createElement("span");
+    const overlap = overlapDuration(kernel, selection);
+    spanDetail.textContent = `${formatTime(overlap)} in span · ` +
+      `${percent(overlap, selection.end - selection.start)} of selected span`;
+    tooltip.append(spanDetail);
+  }
   tooltip.classList.remove("hidden");
   tooltip.style.left = `${Math.min(event.clientX + 16, window.innerWidth - 330)}px`;
   tooltip.style.top = `${Math.min(event.clientY + 16, window.innerHeight - 90)}px`;
@@ -850,7 +949,7 @@ function showTooltip(kernel: KernelEvent, event: PointerEvent): void {
 function inspect(kernel: KernelEvent): void {
   if (!trace) return;
   selected = kernel;
-  inspector.className = "inspector-grid";
+  inspector.className = selection ? "inspector-grid inspector-span" : "inspector-grid";
   inspector.replaceChildren();
   const fields: [string, string][] = [
     ["NAME", trace.names[kernel.nameId] ?? "Unknown kernel"],
@@ -860,6 +959,11 @@ function inspect(kernel: KernelEvent): void {
     ["STREAM", String(kernel.streamId)],
     ["END", formatTime(kernel.endMs)],
   ];
+  if (selection) {
+    const overlap = overlapDuration(kernel, selection);
+    fields.splice(2, 0, ["IN SELECTED SPAN",
+      `${formatTime(overlap)} · ${percent(overlap, selection.end - selection.start)}`]);
+  }
   for (const [label, value] of fields) {
     const field = document.createElement("div");
     field.className = "inspector-field";

@@ -28,6 +28,10 @@ URL such as `https://<user>.github.io/<repo>/` and when previewed locally.
 
 Drag device rows to reorder them, or edit their labels. Drag across the timeline to measure a span; drag its edges to adjust it. Shift+drag or scroll horizontally to pan, and pinch or use +/− to zoom. Click a kernel for details. Row order and labels are saved locally in the browser.
 
+The browser tab title defaults to the SQLite filename. Double-click the trace heading or click **Rename** to set an alias; Enter or clicking away saves it, and Escape cancels. **Reset title** restores the filename. Aliases are saved locally per filename and file size.
+
+Measuring a span switches the kernel breakdown to that span. **Span %** is summed kernel time inside the selection divided by its duration; concurrent launches and multiple GPUs can exceed 100%. Kernels crossing either boundary contribute only their time inside the span. Calls count launches overlapping the selection, and Avg uses their clipped durations. Hover or click a kernel to see its individual contribution alongside its full duration. Clearing the selection restores the full-trace breakdown. Device and name filters still apply; searching does not change percentage denominators.
+
 The breakdown groups exact kernel names. **GPU share** is summed kernel time divided by total kernel time for the selected GPUs. **Wall %** is the time covered by that kernel name divided by the full trace span. Kernel names can overlap, so Wall % does not add to 100% or represent removable latency.
 
 The viewer reads GPU kernel activity from Nsight Systems SQLite exports. CPU activity, NVTX, CUDA API calls, and memory operations are not shown. Nsight's SQLite schema may change between versions.

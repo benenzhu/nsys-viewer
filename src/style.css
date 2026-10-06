@@ -109,6 +109,9 @@ button { cursor: pointer; }
 .trace-heading { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
 .trace-heading strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .trace-heading span { color: var(--muted); white-space: nowrap; font-size: 11px; }
+.trace-heading > strong { cursor: text; }
+.trace-heading > button { flex: none; }
+.title-input { width: 240px; min-width: 100px; max-width: 40vw; height: 28px; padding: 0 6px; border: 1px solid var(--accent); border-radius: 3px; background: var(--raised); color: var(--text); font-size: 12px; }
 .trace-stats { display: flex; gap: 15px; flex: none; color: var(--muted); white-space: nowrap; font-size: 11px; }
 .trace-stats strong { color: var(--text); font-weight: 600; }
 
@@ -159,6 +162,7 @@ button { cursor: pointer; }
 .inspector-title { margin-bottom: 9px; color: var(--mutedStrong); font-size: 12px; font-weight: 600; }
 .inspector-empty { color: var(--muted); font-size: 11px; }
 .inspector-grid { display: grid; grid-template-columns: minmax(220px, 2.4fr) repeat(5, minmax(90px, 1fr)); gap: 12px; }
+.inspector-span { grid-template-columns: minmax(220px, 2.4fr) repeat(6, minmax(90px, 1fr)); }
 .inspector-field { min-width: 0; }
 .inspector-field span { display: block; margin-bottom: 4px; color: var(--muted); font-size: 10px; }
 .inspector-field strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font: 11px ui-monospace, Consolas, monospace; }
@@ -177,6 +181,7 @@ button { cursor: pointer; }
 .breakdown-table th button span { display: inline-block; min-width: 10px; color: var(--accent); }
 .breakdown-table td { overflow: hidden; padding: 5px 8px; border-bottom: 1px solid var(--border); color: var(--text); font: 11px ui-monospace, Consolas, monospace; text-align: right; white-space: nowrap; }
 .breakdown-table .kernel-name { text-align: left; text-overflow: ellipsis; }
+.breakdown-table .breakdown-empty { padding: 18px 10px; text-align: left; color: var(--muted); }
 .breakdown-table tbody tr:hover { background: var(--hover); }
 .tooltip { position: fixed; z-index: 30; width: 315px; pointer-events: none; padding: 9px 10px; border: 1px solid var(--controlBorder); background: var(--tooltipBg); box-shadow: 0 4px 12px #0006; }
 .tooltip strong { display: block; overflow-wrap: anywhere; color: var(--text); font: 11px ui-monospace, Consolas, monospace; }
