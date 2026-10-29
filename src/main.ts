@@ -817,9 +817,10 @@ function drawStage(canvas: HTMLCanvasElement, stage: Stage): void {
       ctx.fillStyle = kernelColors.get(kernel.nameId) ?? "#587f95";
       ctx.fillRect(x0, top, barWidth, 20);
       if (barWidth >= 3 && ctx.globalAlpha > 0.5) {
-        ctx.strokeStyle = colors.edge;
-        ctx.lineWidth = 1;
-        ctx.strokeRect(x0 + 0.5, top + 0.5, barWidth - 1, 19);
+        // One 1 px divider at the kernel's start: back-to-back kernels stay 1 px apart. A border on both
+        // sides put 2-3 px of near-background colour between them, which reads as an idle gap.
+        ctx.fillStyle = colors.edge;
+        ctx.fillRect(Math.round(x0), top, 1, 20);
       }
       if (barWidth >= 10 && ctx.globalAlpha > 0.5) {
         ctx.save();
