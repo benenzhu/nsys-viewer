@@ -1,5 +1,5 @@
 import { FileDragDepth, isFileDrag } from "./filedrop";
-import { ZOOM_KEYS, ZOOM_RATE_PER_MS, isTextEntry, zoomedView } from "./keyzoom";
+import { heldKeysView, isNavKey, isTextEntry } from "./wasd";
 import "./style.css";
 import type { KernelEvent, Stage, TraceData, WorkerResponse } from "./types";
 import { overlapDuration, summarizeKernels, type KernelSummary, type TimeSpan } from "./breakdown";
@@ -66,7 +66,7 @@ app.innerHTML = `
             <canvas id="axis-canvas" class="axis-canvas" aria-label="Time axis"></canvas>
           </div>
           <div id="stage-rows" class="stage-rows"></div>
-          <div class="timeline-footer">Drag to measure · drag either edge to adjust · click elsewhere on the timeline or press Esc to clear · Shift+drag or horizontal scroll to pan · pinch, +/− or hold W / S to zoom</div>
+          <div class="timeline-footer">Drag to measure · drag either edge to adjust · click elsewhere on the timeline or press Esc to clear · Shift+drag or horizontal scroll to pan · pinch, +/− or hold W / S to zoom · A / D to pan</div>
         </div>
 
         <div class="inspector-card">
@@ -153,8 +153,8 @@ let kernelColors = new Map<number, string>();
 let viewStartMs = 0;
 let viewEndMs = 1;
 let pointerFraction: number | null = null;
-const heldZoomKeys = new Set<string>();
-let heldZoomLastMs = 0;
+const heldNavKeys = new Set<string>();
+let heldNavLastMs = 0;
 let selected: KernelEvent | null = null;
 let hovered: KernelEvent | null = null;
 let selection: TimeSpan | null = null;
@@ -1170,36 +1170,31 @@ element<HTMLElement>(".viewer-card").addEventListener("wheel", (event) => {
   }
 }, { capture: true, passive: false });
 element<HTMLButtonElement>("#clear-selection").addEventListener("click", () => setSelection(null));
-// Hold W / S to zoom in / out around the mouse (the view centre when it is off the timeline),
-// continuously while the key is down, as in Perfetto and chrome://tracing.
-function stepHeldZoom(now: number): void {
-  if (!heldZoomKeys.size || !trace) {
-    heldZoomLastMs = 0;
+// WASD as in Perfetto and chrome://tracing, continuously while a key is down: W / S zoom in / out
+// around the mouse (the view centre when it is off the timeline), A / D pan left / right.
+function stepHeldKeys(now: number): void {
+  if (!heldNavKeys.size || !trace) {
+    heldNavLastMs = 0;
     return;
   }
-  const elapsed = heldZoomLastMs ? Math.min(50, now - heldZoomLastMs) : 16;
-  heldZoomLastMs = now;
-  let direction = 0;
-  for (const key of heldZoomKeys) direction += ZOOM_KEYS[key];
-  if (direction) {
-    const view = zoomedView(viewStartMs, viewEndMs, pointerFraction ?? 0.5,
-      Math.exp(direction * elapsed * ZOOM_RATE_PER_MS));
-    setView(view.start, view.end);
-  }
-  requestAnimationFrame(stepHeldZoom);
+  const elapsed = heldNavLastMs ? Math.min(50, now - heldNavLastMs) : 16;
+  heldNavLastMs = now;
+  const view = heldKeysView(viewStartMs, viewEndMs, heldNavKeys, elapsed, pointerFraction ?? 0.5);
+  if (view.start !== viewStartMs || view.end !== viewEndMs) setView(view.start, view.end);
+  requestAnimationFrame(stepHeldKeys);
 }
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && selection) setSelection(null);
   const key = event.key.toLowerCase();
-  if (!Object.prototype.hasOwnProperty.call(ZOOM_KEYS, key) || !trace || event.ctrlKey || event.metaKey || event.altKey ||
+  if (!isNavKey(key) || !trace || event.ctrlKey || event.metaKey || event.altKey ||
       isTextEntry(event.target)) return;
   event.preventDefault();
-  if (heldZoomKeys.has(key)) return;
-  heldZoomKeys.add(key);
-  if (heldZoomKeys.size === 1) requestAnimationFrame(stepHeldZoom);
+  if (heldNavKeys.has(key)) return;
+  heldNavKeys.add(key);
+  if (heldNavKeys.size === 1) requestAnimationFrame(stepHeldKeys);
 });
-window.addEventListener("keyup", (event) => heldZoomKeys.delete(event.key.toLowerCase()));
-window.addEventListener("blur", () => heldZoomKeys.clear());
+window.addEventListener("keyup", (event) => heldNavKeys.delete(event.key.toLowerCase()));
+window.addEventListener("blur", () => heldNavKeys.clear());
 bindTimelineEvents(axis);
 breakdownDevice.addEventListener("change", renderBreakdown);
 document.querySelectorAll<HTMLButtonElement>(
