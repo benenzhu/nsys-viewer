@@ -1,7 +1,7 @@
+import { FileDragDepth, isFileDrag } from "./filedrop";
 import "./style.css";
 import type { KernelEvent, Stage, TraceData, WorkerResponse } from "./types";
 import { overlapDuration, summarizeKernels, type KernelSummary, type TimeSpan } from "./breakdown";
-import { FileDragDepth, isFileDrag } from "./filedrop";
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) throw new Error("Missing app root");
